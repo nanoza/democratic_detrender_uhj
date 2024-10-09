@@ -11,11 +11,16 @@ import ast
 
 # print(f"exoplanet.__version__ = '{xo.__version__}'")
 
-from democratic_detrender.get_lc import *
-from democratic_detrender.helper_functions import *
-from democratic_detrender.outlier_rejection import *
-from democratic_detrender.manipulate_data import *
-from democratic_detrender.plot import *
+# from democratic_detrender.get_lc import *
+# from democratic_detrender.helper_functions import *
+# from democratic_detrender.outlier_rejection import *
+# from democratic_detrender.manipulate_data import *
+# from democratic_detrender.plot import *
+from get_lc import *
+from helper_functions import *
+from outlier_rejection import *
+from manipulate_data import *
+from plot import *
 
 
 def find_flux_jumps(

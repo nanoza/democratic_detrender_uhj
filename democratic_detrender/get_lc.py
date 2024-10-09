@@ -5,8 +5,9 @@ from scipy.interpolate import interp1d
 from matplotlib.widgets import Slider, Button
 import pandas as pd
 
-from democratic_detrender.helper_functions import find_nearest
-from democratic_detrender.helper_functions import determine_cadence
+# from democratic_detrender.helper_functions import find_nearest
+# from democratic_detrender.helper_functions import determine_cadence
+from helper_functions import find_nearest, determine_cadence
 
 import math
 import lightkurve as lk
