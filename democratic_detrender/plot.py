@@ -487,6 +487,10 @@ def plot_split_data(x_split, y_split, t0s, figname, object_id):
 
     if len(x_split) > 1:
         for ii in range(0, len(x_split)):
+            # check if split quarter has data, if not skip
+            if len(x_split[ii]) == 0: # if this quarter has no data for some reason
+                print("No plottable data in  sector/quarter " + str(ii) + "???")
+                continue
             xmin = np.min(x_split[ii])
             xmax = np.max(x_split[ii])
 
@@ -542,7 +546,7 @@ def plot_individual_outliers(
     t0s = midtransits in data
     """
 
-    plt.close("all")
+    plt.close("all")    
     outlier_times = []
     outlier_fluxes = []
     n_outliers = len(flux) - len(flux_out)

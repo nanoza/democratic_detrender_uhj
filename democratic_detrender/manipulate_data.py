@@ -295,12 +295,16 @@ def find_quarters_with_transits(
 
     quarters_included = []
     for ii in range(0, len(x_quarters)):
+
         x_quarter = x_quarters[ii]
         y_quarter = y_quarters[ii]
         yerr_quarter = yerr_quarters[ii]
         mask_quarter = mask_quarters[ii]
         mask_fitted_planet_quarter = mask_fitted_planet_quarters[ii]
-
+        # check that quarter is not empty, if so, skip
+        if len(x_quarter) == 0:
+            print(f"quarter/sector {ii} is empty")
+            continue
         xmin = np.min(x_quarter)
         xmax = np.max(x_quarter)
 

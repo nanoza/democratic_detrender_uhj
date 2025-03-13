@@ -338,6 +338,18 @@ def get_light_curve(
             print("assuming 2 hours for " + str(ii + 1) + "th planet duration!")
             durations[ii] = 2.0
 
+    # if no t0 values found for a particular planet, assume that planet doesn't have transit info and throw it out
+    planets_without_transit_info = transit_info['t0 [BJD]'].isna()
+    if planets_without_transit_info.any(): # if resulting list does contain any Trues
+        indices_to_remove = planets_without_transit_info.reset_index(drop=True).index[planets_without_transit_info]
+        for idx in range(len(indices_to_remove)):
+            print(
+                "no t0 information on exoplanet archive for the "
+                + str(indices_to_remove[idx] + 1)
+                + "th/rd planet. Discarding this planet as it does not have transit data.")
+        transit_info = transit_info[~planets_without_transit_info]
+
+
     print("")
     print("")
 
@@ -426,6 +438,8 @@ def get_light_curve(
     xs = lc.time.value
     ys = lc.flux
     ys_err = lc.flux_err
+
+    print(periods, durations, t0s)
 
     mask = np.zeros(np.shape(xs), dtype=bool)
     for ii in range(0, nplanets):
