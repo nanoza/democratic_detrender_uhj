@@ -439,7 +439,8 @@ def get_light_curve(
     ys = lc.flux
     ys_err = lc.flux_err
 
-    print(periods, durations, t0s)
+    # print(periods, durations, t0s)
+    print(f'{len(quarters)} quarters found. ')
 
     mask = np.zeros(np.shape(xs), dtype=bool)
     for ii in range(0, nplanets):
