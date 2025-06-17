@@ -164,3 +164,92 @@ def local_method(
     # detrended_x = np.concatenate(x_local, axis=0)
 
     return detrended_lc
+
+def local_method_single(
+    x_epochs,
+    y_epochs,
+    yerr_epochs,
+    mask_epochs,
+    mask_fitted_planet_epochs,
+    t0s,
+    duration,
+    period,
+):
+    
+
+    from scipy.stats import median_absolute_deviation
+
+    x = x_epochs[0]
+    y = y_epochs[0]
+    yerr = yerr_epochs[0]
+    mask = mask_epochs[0]
+    mask_fitted_planet = mask_fitted_planet_epochs[0]
+
+    # then convert to proper np arrays
+    x = np.array(x, dtype=float)
+    y = np.array(y, dtype=float)
+    yerr = np.array(yerr, dtype=float)
+    mask = np.array(mask, dtype=bool)
+    mask_fitted_planet = np.array(mask_fitted_planet, dtype=bool)
+
+    t0 = t0s[0]
+
+    # define local window
+    # duration_days = duration / 24.0
+    window_half_width = 3 * duration  # 3 durations on each side = 6 total, assuming given duration is in days
+    print('local')
+
+    
+    # Extract local window around transit
+    local_mask = np.abs(x - t0) <= window_half_width
+    print(len(local_mask))
+    x_local = x[local_mask]
+    y_local = y[local_mask]
+    yerr_local = yerr[local_mask]
+    mask_local = mask[local_mask]
+    
+
+    try:
+        local = polyLOC_iterative(x_local, y_local, yerr_local, mask_local)
+        # print(local)
+
+        polyLOC_interp = interp1d(
+            x_local[~mask_local], local[0], bounds_error=False, fill_value="extrapolate"
+        )
+
+        best_model = polyLOC_interp(x_local)
+
+        # extend model to full data array
+        full_model = np.zeros_like(x)
+        full_model[local_mask] = best_model
+
+        # for points outside local window, extrapolate or use a constant
+        if np.any(~local_mask):
+            # Simple approach: use edge values
+            full_model[x < x_local[0]] = best_model[0]
+            full_model[x > x_local[-1]] = best_model[-1]
+        
+        # Detrend full light curve
+        y_detrended = get_detrended_lc(y, full_model)
+
+        # apply linear polynomial fit at the end
+        
+        # Apply linear correction (as in original)
+        try:
+            # Fit linear to out-of-transit detrended data
+            linear_coeffs = np.polyfit(x[~mask], y_detrended[~mask], 1)
+            linear_model = np.polyval(linear_coeffs, x)
+            
+            # Apply linear correction
+            y_final_detrended = get_detrended_lc(y_detrended, linear_model)
+            
+        except:
+            print("Linear correction failed, returning without linear detrending")
+            y_final_detrended = y_detrended
+            
+    except Exception as e:
+        print(f"Local detrending failed for this epoch: {e}")
+        # Return NaN array if detrending fails
+        y_final_detrended = np.full_like(y, np.nan)
+
+    return y_final_detrended

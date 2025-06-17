@@ -45,14 +45,17 @@ def single_parse_arguments():
     )
 
     parser.add_argument(
-        "object", type=str, help='TESS or Kepler identifier. ex: "toi-2088". In this case, serves purely to label plots.'
+        "object_name", type=str, help='Exoplanetary object identifier. In this case, serves purely to label plots and subdirectories'
     )
 
     parser.add_argument('planet_num', type=int, help='Number of planet. In this case, serves purely to label plots and subdirectories.')
 
-    parser.add_argument("transit_num", type=int, help='Number of inputted transit. In this, serves purely to label plots.')
+    parser.add_argument("transit_num", type=int, help='Number of inputted transit, assuming each input lightcurve is of one transit. In this, serves purely to label plots.')
 
     parser.add_argument('path_to_lightcurve', help='Path that points to lightcurve of transit, including file name.')
+
+    parser.add_argument('--flux_type', default='DVT', help='Set flux type. Original supported PDC and SAP but not DVT. This version should support those in addition to DVT but '
+                        'default will be DVT for now. Will incorporate PDC and SAP handling later.' )
 
     parser.add_argument('--already_normalized', action='store_true', help='If set, detrender assumes the flux is already normalized and thus' \
         'does not normalize it any further.')
@@ -64,7 +67,6 @@ def single_parse_arguments():
         help="Directory path to save csvs and figures to. By default, saves to same directory as the input lightcurve.",
     )
 
-
     parser.add_argument(
         "-d",
         "--depth",
@@ -72,31 +74,30 @@ def single_parse_arguments():
         help="Sets depth of detrended plot. Default is 0.02.",
     )
 
-
     parser.add_argument(
         "--p",
         "--period",
         default=None,
-        help="Optionally input period. Defaults to None. None option is useful if period is wrong."
+        help="Optionally input period. Defaults to None. None option is useful if period is wrong. Will assume a period of 1000 days, need to check if this affects final analysis."
     )
 
     parser.add_argument(
         "-t",
         "--t0",
         default=None,
-        help='Optionally input t0 (mid-transit time). Otherwise None but will break. Should be in units of' \
-            'TESS BJD - 2457000.'
+        help='Optionally input t0 (mid-transit time). Otherwise None but will assume input lightcurve is centered on transit and so will attempt to set the middle as the t0. Should be in units of' \
+            'TESS BJD - 2457000. May need a guess t0 per transit to work properly.'
     )
 
     parser.add_argument(
         "-du",
         "--duration",
         default=None,
-        help="Optionally input duration.",
+        help="Optionally input duration. Helps set transit mask. INPUT IN UNITS OF DAYS!!!",
     )
 
     parser.add_argument(
-        "-mw", "--mask_width", default=1.3, help="Sets mask width. Default is 1.3."
+        "-mw", "--mask_width", default=1.3, help="Sets the number by which to multiply duration with to create the transit mask. Default is 1.3."
     )
 
     parser.add_argument(
@@ -117,12 +118,48 @@ def single_parse_arguments():
 
     return parser.parse_args()
 
-def get_single_user_lightcurve(lightcurve_path, save_to_dir, planet_num, transit_num, already_normalized, depth, period,
-                           t0, duration, mask_width, show_plots):
+def prepare_ephemeris(user_period, user_t0, user_duration, xs, mask_width=1.3):
+
+    # set t0 to median of time array if None
+    if user_t0 is None:
+        # t0 = np.median(xs)
+        xs_midpoint = len(xs) // 2 # assuming input transit data is already centered on transit
+        t0 = xs[xs_midpoint]
+        print(f'No t0 found. Assuming input data is centered around transit, meaning t0 = {t0}.')
+    else:
+        t0 = user_t0
+
+    # set to duration to either whole transit (might not detrend anything bc it thinks everything is the transit) or 2 hours
+    if user_duration is None:
+        # create temporary mask
+        temp_duration = np.max(xs) - np.min(xs)
+        temp_duration_in_days = temp_duration / 24.0 # convert to hours
+        temp_half_width = temp_duration_in_days * mask_width / 2.0
+        temp_mask = np.abs(xs - t0) <= temp_half_width
+        if np.any(temp_mask):
+            # Estimate from mask
+            transit_indices = np.where(temp_mask)[0]
+            duration = (xs[transit_indices[-1]] - xs[transit_indices[0]]) * 24
+        else:
+            duration = 2.0  # default 2 hours
+    else:
+        duration = user_duration
+
+    # and then if period is None use a v large value if not provided
+    if user_period is None:
+        period = 1000.0 # days
+    else:
+        period = user_period
+
+    return period, t0, duration
+
+
+def process_single_user_lightcurve(lightcurve_path, save_to_directory, planet_num, transit_num, already_normalized, depth, period,
+                           t0, duration, mask_width, show_plots, path, flux_type, objectname):
        
     # read in light curve as pandas dataframe
     # assuming three columns: xs (time), ys (flux), and ys_err (flux error)
-
+    
     print(f"Now loading light curve from: {lightcurve_path}")
 
     lc_df = pd.read_csv(lightcurve_path)
@@ -132,223 +169,253 @@ def get_single_user_lightcurve(lightcurve_path, save_to_dir, planet_num, transit
     ys = lc_df.iloc[:, 1].values
     ys_err = lc_df.iloc[:, 2].values
 
+    # prepare ephermeris
+    [period, t0, duration] = prepare_ephemeris(period, t0, duration, xs)
+
+    t0s = [t0] # to make compatible with detrender functions
+
+    # starting to diverge from democratic_detrender here a bit
+    # may need to create masks later after first determining a neutral way to determine the transit without ephermeris
+    # ok we doooo neeed transit duration though, or at least a guess
+    # creating transit mask based off 1.3 * duration guess and a mid-transit time guess
+
+    xs_array = np.asarray(xs) # time
+    ys_array = np.asarray(ys) # lc
+    ys_err_array = np.asarray(ys_err) # lc_err
+
+    left_point_mask = t0 - mask_width*duration
+    right_point_mask = t0 + mask_width*duration
+
+    mask = (xs_array > left_point_mask) & (xs_array < right_point_mask) # np.array of booleans that flag whether data is in transit
+    mask_fitted_planet = mask # working on one planet at a time, assuming one planet caught by transit data
+    
+    cadence = determine_cadence(xs)
+
+    quarters = []
+    quarters.append([np.min(xs), np.max(xs)]) # should be just the one sector (?)
+
+    # end times of quarters
+    quarters_end = [el[-1] for el in quarters]
+
     if not already_normalized:
         # normalize
         mu = np.median(ys)
         ys = ys / mu - 1
         ys_err = ys_err / mu
-        
-    return xs, ys, ys_err
-
-def prepare_single_transit_data(xs, ys, ys_err, t0, period, duration, mask_width=1.3):
-
-    # first convert to numpy arrays
-    xs = np.asarray(xs, dtype=float)
-    ys = np.asarray(ys, dtype=float)
-    ys_err = np.asarray(ys_err, dtype=float)
-
-    # then determine cadence
-    cadence = determine_cadence(xs)
-
-    # create masks
-    duration_in_days = duration / 24.0 # convert to days
-    half_width = duration_in_days * mask_width / 2.0
-    mask = np.abs(xs - t0) <= half_width
-    mask_fitted_planet = mask.copy()
-
-    # package as a single epoch as the original functions expect lists
-
-    x_epochs = [xs]
-    y_epochs = [ys]
-    yerr_epochs = [ys_err]
-    mask_epochs = [mask]
-    mask_fitted_planet_epochs = [mask_fitted_planet]
-
-    # create t0s array
-    if t0 is not None:
-        t0s = np.asarray([t0])
-    else:
-        t0s = np.asarray([np.median(xs)])
-
-    # and then period (use a v large value if not provided)
-    if period is None:
-        period = 1000.0 # days
-
-    # duration now
-
-    if duration is None:
-        if np.any(mask):
-            # Estimate from mask
-            transit_indices = np.where(mask)[0]
-            duration = (xs[transit_indices[-1]] - xs[transit_indices[0]]) * 24
-        else:
-            duration = 3.0  # default 3 hours
-
-    # then find local window bounds
-    if t0 is not None:
-        transit_idx = np.argmin(np.abs(xs - t0))
-        local_start = max(0, transit_idx - int(3 * duration / (24 * cadence)))
-        local_end = min(len(xs)-1, transit_idx + int(3 * duration / (24 * cadence)))
-        local_start_x = xs[local_start]
-        local_end_x = xs[local_end]
-    else:
-        local_start_x = xs[0]
-        local_end_x = xs[-1]
     
-    # now create local window for local detrending
-    local_window_size = float(6 * duration / 24.0) / period
-    # local_data corresponds to
-    ''' 
-        local_x_epochs,
-        local_y_epochs,
-        local_yerr_epochs,
-        local_mask_epochs,
-        local_mask_fitted_planet_epochs'''
-    local_data = split_around_transits(
-        xs, ys, ys_err, mask, mask_fitted_planet,
-        t0s, local_window_size, period
+    # reject outliers out of transit
+    (
+        time_out,
+        flux_out,
+        flux_err_out,
+        mask_out,
+        mask_fitted_planet_out,
+        moving_median,
+    ) = reject_outliers_out_of_transit(
+        xs_array, ys_array, ys_err_array, np.asarray(mask,dtype=bool), np.asarray(mask_fitted_planet,dtype=bool), 30 * cadence, 4
     )
 
-    return [
-        xs, ys, ys_err,
-        mask, mask_fitted_planet,
-        x_epochs, y_epochs, yerr_epochs,
-        mask_epochs, mask_fitted_planet_epochs,
-        t0s, period, duration, cadence,
-        local_start_x, local_end_x, local_data
-    ]
-    
+    plot_outliers(
+        xs_array,
+        ys_array,
+        time_out,
+        flux_out,
+        moving_median,
+        quarters_end,
+        path + '/' +  str(flux_type) + "_" + "outliers.pdf",
+        objectname
+    )
+    if show_plots:
+        plt.show()
 
-def single_local(xs, ys, ys_err, t0, period, duration):
+    (
+        x_quarters,
+        y_quarters,
+        yerr_quarters,
+        mask_quarters,
+        mask_fitted_planet_quarters,
+    ) = split_around_problems(
+        time_out, flux_out, flux_err_out, mask_out, mask_fitted_planet_out, quarters_end
+    ) # basically reuse split around problems to split around quarters
 
-    # first prepare data to match what local method is expecting
-    epochdata = prepare_single_transit_data(xs, ys, ys_err, t0, period, duration)
+    plot_split_data(
+        x_quarters,
+        y_quarters,
+        t0s,
+        path + '/' + str(flux_type) +  "_" + "quarters_split.pdf",
+        objectname,
+    )
+    if show_plots:
+        plt.show()
 
-    # then feed into local method function
-    local_detrended = local_method(
-        epochdata[5], epochdata[6], epochdata[7], # x_epochs, y_epochs, yerr_epochs
-        epochdata[8], epochdata[9],          # mask_epochs, mask_fitted_planet_epochs
-        epochdata[10], epochdata[12], epochdata[11]  # t0s, duration, period
+    (
+        x_quarters_w_transits,
+        y_quarters_w_transits,
+        yerr_quarters_w_transits,
+        mask_quarters_w_transits,
+        mask_fitted_planet_quarters_w_transits,
+    ) = find_quarters_with_transits(
+        x_quarters,
+        y_quarters,
+        yerr_quarters,
+        mask_quarters,
+        mask_fitted_planet_quarters,
+        t0s,
     )
 
-    return local_detrended, epochdata
-
-def single_polyam(xs, ys, ys_err, t0, period, duration):
-
-    # first prepare data to match what polyAM method is expecting
-    epochdata = prepare_single_transit_data(xs,ys, ys_err, t0, period, duration)
-
-    # interpolate model to all points
-    try:
-
-        # call polyAM_iterative
-        poly = polyAM_iterative(
-            epochdata[0], epochdata[1], epochdata[3], epochdata[4], # xs, ys, ys_err, mask, mask_fitted_planet
-            epochdata[14], epochdata[15] # local_start_x, local_end _x
-        )
-
-        poly_interp = interp1d(
-            epochdata[0][~epochdata[3]], poly[0], bounds_error=False, fill_value='extrapolate'
-        )
-        best_model = poly_interp(epochdata[0])
-        DW = poly[2]
-
-        # detrend 
-        detrended = get_detrended_lc(epochdata[1], best_model)
-
-    except:
-        print(f'polyAM failed for this epoch')
-        detrended = np.asarray([])
-        DW = None
-
-    # then add linear detrending
-    try:
-        linear_model = polyAM_function(epochdata[0][~epochdata[3]], detrended[~epochdata[3]], 1)
-        linear_interp = interp1d(
-            epochdata[0][~epochdata[3]], linear_model,
-            bounds_error = False, fill_value = 'extrapolate'
-        )
-        final_linear = linear_interp(epochdata[0])
-        final_detrended = get_detrended_lc(detrended, final_linear)
-    except:
-        print("polyAM failed for this epoch")
-        final_detrended = np.asarray([])
-
-    return final_detrended, DW, epochdata
-
-
-def single_gp(xs, ys, ys_err, t0, period, duration):
-
-    epochdata = prepare_single_transit_data(xs, ys, ys_err, t0, period, duration)
-
-    # use original gp method
-    detrended = gp_method(
-        epochdata[5], epochdata[6], epochdata[7], # x_epochs, y_epochs, yerr_epochs
-        epochdata[8], epochdata[9],          # mask_epochs, mask_fitted_planet_epochs
-        epochdata[10], epochdata[12], epochdata[11]  # t0s, duration, period
+    x_quarters_w_transits = np.concatenate(x_quarters_w_transits, axis=0, dtype=object)
+    y_quarters_w_transits = np.concatenate(y_quarters_w_transits, axis=0, dtype=object)
+    yerr_quarters_w_transits = np.concatenate(
+        yerr_quarters_w_transits, axis=0, dtype=object
+    )
+    mask_quarters_w_transits = np.concatenate(
+        mask_quarters_w_transits, axis=0, dtype=object
+    )
+    mask_fitted_planet_quarters_w_transits = np.concatenate(
+        mask_fitted_planet_quarters_w_transits, axis=0, dtype=object
     )
 
-    return detrended, epochdata
+    mask_quarters_w_transits = np.array(mask_quarters_w_transits, dtype=bool)
+    mask_fitted_planet_quarters_w_transits = np.array(
+        mask_fitted_planet_quarters_w_transits, dtype=bool
+    )
 
-def single_cofiam(xs, ys, ys_err, t0, period, duration):
+    (
+        x_transits,
+        y_transits,
+        yerr_transits,
+        mask_transits,
+        mask_fitted_planet_transits,
+    ) = split_around_transits(
+        x_quarters_w_transits,
+        y_quarters_w_transits,
+        yerr_quarters_w_transits,
+        mask_quarters_w_transits,
+        mask_fitted_planet_quarters_w_transits,
+        t0s,
+        1.0 / 2.0,
+        period,
+    )
 
-    epochdata = prepare_single_transit_data(xs, ys, ys_err, t0, period, duration)
+    if len(mask_transits) == 1:
+        mask_transits = np.array(mask_transits, dtype=bool)
+        mask_fitted_planet_transits = np.array(mask_fitted_planet_transits, dtype=bool)
 
-    try:
-        # Call original cofiam_iterative
-        cofiam = cofiam_iterative(
-            epochdata[0], epochdata[1], epochdata[3], epochdata[4], # xs, ys, ys_err, mask, mask_fitted_planet
-            epochdata[14], epochdata[15] # local_start_x, local_end _x
-        )
+    x_epochs = np.concatenate(x_transits, axis=0, dtype=object)
+    y_epochs = np.concatenate(y_transits, axis=0, dtype=object)
+    yerr_epochs = np.concatenate(yerr_transits, axis=0, dtype=object)
+    mask_epochs = np.concatenate(mask_transits, axis=0, dtype=object)
+    mask_fitted_planet_epochs = np.concatenate(
+        mask_fitted_planet_transits, axis=0, dtype=object
+    )
 
-        # interpolate model
-        cofiam_interp = interp1d(
-            epochdata[0][~epochdata[3]], cofiam[0], bounds_error=False, fill_value='extrapolate'
-        )
-        best_model = cofiam_interp(epochdata[0])
-        DW = cofiam[2]
-    except:
-        print('CoFiAM failed for this epoch')
-        detrended = np.asarray([])
-        DW = None
-    
-    # detrend
-    detrended = get_detrended_lc(epochdata[1], best_model)
+    # put in bit that handles problem times here, need to figure out how to adapt it later
+    problem_times = []
 
-    # add linear detrending
-    try:
-        linear_model = polyAM_function(epochdata[0][~epochdata[3]], detrended[~epochdata[3]], 1)
-        linear_interp = interp1d(
-            epochdata[0][~epochdata[3]], linear_model,
-            bounds_error = False, fill_value = 'extrapolate'
-        )
-        final_linear = linear_interp(epochdata[0])
-        final_detrended = get_detrended_lc(detrended, final_linear)
-    except:
-        print("CoFiAM failed for this epoch")
-        final_detrended = np.asarray([])
+    # adapt bit that checks for problem times later, put here
 
-    return final_detrended, DW, epochdata
+    return (
+        x_epochs,
+        y_epochs,
+        yerr_epochs,
+        mask_epochs,
+        mask_fitted_planet_epochs,
+        problem_times,
+        t0s,
+        period,
+        duration,
+        cadence,
+    )   
 
 
-
-
-def detrend_single_variable_methods(xs, ys, ys_err, t0, period, duration, save_to_directory, show_plots, detrend_methods):
+def detrend_single_variable_methods(x_epochs, y_epochs, yerr_epochs, mask_epochs, mask_fitted_planet_epochs, problem_times, t0s, period, duration, cadence, save_to_directory, show_plots, detrend_methods, path,
+                                    flux_type, objectname):
 
 
     all_detrended = []
     all_results = []
     detrend_methods_success = []
 
-  
-    # below function returns:
-    # [    xs, ys, ys_err,
-    #     mask, mask_fitted_planet,
-    #     x_epochs, y_epochs, yerr_epochs,
-    #     mask_epochs, mask_fitted_planet_epochs,
-    #     t0s, period, duration, cadence,
-    #     local_start_x, local_end_x, local_data ]
-    prepared_metadata = prepare_single_transit_data(xs, ys, ys_err, t0, period, duration)
+    # insert thing that handles clipping around problem times here, testing with pre-clipped data for now
+    # adaptation of trim_jump_times
+    # just use x_epochs, y_epochs, yerr_epochs, mask_epochs, mask_fitted_planet_epochs in place
+    # x_trimmed = x_epochs
+    # y_trimmed = y_epochs
+    # yerr_trimmed = yerr_epochs
+    # mask_trimmed = mask_epochs
+    # mask_fitted_planet_trimmed = mask_fitted_planet_epochs
+    (
+        x_trimmed,
+        y_trimmed,
+        yerr_trimmed,
+        mask_trimmed,
+        mask_fitted_planet_trimmed,
+    ) = trim_jump_times(
+        x_epochs,
+        y_epochs,
+        yerr_epochs,
+        mask_epochs,
+        mask_fitted_planet_epochs,
+        t0s,
+        period,
+        problem_times,
+    )
+
+    #### polyam, gp, cofiam friendly mask arrays ####
+
+    friendly_mask_trimmed = []
+    for boolean in range(len(mask_trimmed)):
+        friendly_boolean = mask_trimmed[boolean].astype(bool)
+        friendly_mask_trimmed.append(friendly_boolean)
+
+    friendly_mask_fitted_planet_trimmed = []
+    for boolean in range(len(mask_fitted_planet_trimmed)):
+        friendly_boolean = mask_fitted_planet_trimmed[boolean].astype(bool)
+        friendly_mask_fitted_planet_trimmed.append(friendly_boolean)
+
+    friendly_x_trimmed = []
+    for time_array in range(len(x_trimmed)):
+        friendly_time_array = x_trimmed[time_array].astype(float)
+        friendly_x_trimmed.append(friendly_time_array)
+
+    friendly_y_trimmed = []
+    for flux_array in range(len(y_trimmed)):
+        friendly_flux_array = y_trimmed[flux_array].astype(float)
+        friendly_y_trimmed.append(friendly_flux_array)
+
+    friendly_yerr_trimmed = []
+    for flux_err_array in range(len(yerr_trimmed)):
+        friendly_flux_err_array = yerr_trimmed[flux_err_array].astype(float)
+        friendly_yerr_trimmed.append(friendly_flux_err_array)
+
+    # determine local window values, zoom in around local window
+    (
+        local_x_epochs,
+        local_y_epochs,
+        local_yerr_epochs,
+        local_mask_epochs,
+        local_mask_fitted_planet_epochs,
+    ) = split_around_transits(
+        np.concatenate(x_trimmed, axis=0, dtype=object),
+        np.concatenate(y_trimmed, axis=0, dtype=object),
+        np.concatenate(yerr_trimmed, axis=0, dtype=object),
+        np.concatenate(mask_trimmed, axis=0, dtype=object),
+        np.concatenate(mask_fitted_planet_trimmed, axis=0, dtype=object),
+        t0s,
+        float(6 * duration) / period, # omit / 24.0 part because input duration should be in units of days already
+        period,
+    )
+
+    local_x = np.concatenate(local_x_epochs, axis=0, dtype=object)
+    local_y = np.concatenate(local_y_epochs, axis=0, dtype=object)
+    local_yerr = np.concatenate(local_yerr_epochs, axis=0, dtype=object)
+    local_mask = np.concatenate(local_mask_epochs, axis=0, dtype=object)
+    local_mask_fitted_planet = np.concatenate(
+        local_mask_fitted_planet_epochs, axis=0, dtype=object
+    )
+
+    local_x = np.asarray(friendly_x_trimmed[0], dtype=float)
+    local_yerr = np.asarray(friendly_yerr_trimmed[0], dtype=float)
 
     # local detrending
     if "local" in detrend_methods:
@@ -356,21 +423,21 @@ def detrend_single_variable_methods(xs, ys, ys_err, t0, period, duration, save_t
         # try
         print("")
         print("detrending via the local method")
-        local_detrended, local_metadata = single_local(
-            xs, ys, ys_err, t0, period, duration
+        local_detrended = local_method_single(
+            friendly_x_trimmed,
+            friendly_y_trimmed,
+            friendly_yerr_trimmed,
+            friendly_mask_trimmed,
+            friendly_mask_fitted_planet_trimmed,
+            t0s,
+            duration,
+            period,
         )
-
-        # remove outliers in unmasksed local detrended lc
-        local_x = np.concatenate(local_metadata[-1][0], axis=0, dtype=object)
-        local_yerr = np.concatenate(local_metadata[-1][2], axis=0, dtype=object)
-        cadence = local_metadata[13]
-        t0s = local_metadata[10]
-        period_processed = local_metadata[11]
-        duration_processed = local_metadata[12]
         
         local_x_no_outliers, local_detrended_no_outliers = reject_outliers_everywhere(
             local_x, local_detrended, local_yerr, 5 * cadence, 5, 10
         )
+
 
         plot_individual_outliers(
             local_x,
@@ -378,9 +445,9 @@ def detrend_single_variable_methods(xs, ys, ys_err, t0, period, duration, save_t
             local_x_no_outliers,
             local_detrended_no_outliers,
             t0s, period,
-            float(6*duration / (24.0) / period),
+            float(6*duration / period),
             0.009,
-            save_to_directory + 'local_outliers.pdf'
+            path + '/' + str(flux_type) + '_' + 'local_outliers.pdf'
         )
 
         end = time.time()
@@ -397,16 +464,19 @@ def detrend_single_variable_methods(xs, ys, ys_err, t0, period, duration, save_t
         start = time.time()
         print("")
         print('detrending via the polyAM method')
-        poly_detrended, poly_DWs, poly_metadata = single_polyam(
-            xs, ys, ys_err, t0, period, duration
-        )
 
-        local_x = np.concatenate(poly_metadata[-1][0], axis=0, dtype=object)
-        local_yerr = np.concatenate(poly_metadata[-1][2], axis=0, dtype=object)
-        cadence = poly_metadata[13]
-        t0s = poly_metadata[10]
-        period_processed = poly_metadata[11]
-        duration_processed = poly_metadata[12]
+
+        poly_detrended, poly_DWs = polynomial_method_single(
+            friendly_x_trimmed,
+            friendly_y_trimmed,
+            friendly_yerr_trimmed,
+            friendly_mask_trimmed,
+            friendly_mask_fitted_planet_trimmed,
+            t0s,
+            duration,
+            period,
+            local_x_epochs,
+        )
 
         # remove outliers in unmasked poly detrended lc
         poly_x_no_outliers, poly_detrended_no_outliers = reject_outliers_everywhere(
@@ -419,9 +489,9 @@ def detrend_single_variable_methods(xs, ys, ys_err, t0, period, duration, save_t
             poly_x_no_outliers,
             poly_detrended_no_outliers,
             t0s, period,
-            float(6*duration / (24.0) / period),
+            float(6*duration / period),
             0.009,
-            save_to_directory + 'polyAM_outliers.pdf'
+            path + '/' + str(flux_type) + '_' + 'polyAM_outliers.pdf'
         )
         
         end = time.time()
@@ -436,16 +506,17 @@ def detrend_single_variable_methods(xs, ys, ys_err, t0, period, duration, save_t
         start = time.time()
         print("")
         print("detrending via the GP method")
-        gp_detrended, gp_metadata = single_gp(
-            xs, ys, ys_err, t0, period, duration
+        gp_detrended = gp_method_single(
+            friendly_x_trimmed,
+            friendly_y_trimmed,
+            friendly_yerr_trimmed,
+            friendly_mask_trimmed,
+            friendly_mask_fitted_planet_trimmed,
+            t0s,
+            duration,
+            period,
         )
 
-        local_x = np.concatenate(gp_metadata[-1][0], axis=0, dtype=object)
-        local_yerr = np.concatenate(gp_metadata[-1][2], axis=0, dtype=object)
-        cadence = gp_metadata[13]
-        t0s = gp_metadata[10]
-        period_processed = gp_metadata[11]
-        duration_processed = gp_metadata[12]
 
         # remove outliers in unmasked poly detrended lc
         gp_x_no_outliers, gp_detrended_no_outliers = reject_outliers_everywhere(
@@ -458,9 +529,9 @@ def detrend_single_variable_methods(xs, ys, ys_err, t0, period, duration, save_t
             gp_x_no_outliers,
             gp_detrended_no_outliers,
             t0s, period,
-            float(6*duration / (24.0) / period),
+            float(6*duration / period),
             0.009,
-            save_to_directory + 'GP_outliers.pdf'
+            save_to_directory + '/' + str(flux_type) + '_' +'GP_outliers.pdf'
         )
         
         end = time.time()
@@ -475,20 +546,18 @@ def detrend_single_variable_methods(xs, ys, ys_err, t0, period, duration, save_t
         start = time.time()
         print("")
         print('detrending via the CoFiAM method')
-        cofiam_detrended, cofiam_DWs, cofiam_metadata = single_cofiam(
-            xs, ys, ys_err, t0, period, duration
+        cofiam_detrended, cofiam_DWs = cofiam_method_single(
+            friendly_x_trimmed,
+            friendly_y_trimmed,
+            friendly_yerr_trimmed,
+            friendly_mask_trimmed,
+            friendly_mask_fitted_planet_trimmed,
+            t0s,
+            duration,
+            period,
+            local_x_epochs,
         )
-
-        local_x = np.concatenate(cofiam_metadata[-1][0], axis=0, dtype=object)
-        local_yerr = np.concatenate(cofiam_metadata[-1][2], axis=0, dtype=object)
-        local_y = np.concatenate(cofiam_metadata[-1][1], axis=0, dtype=object)
-        local_mask = np.concatenate(cofiam_metadata[-1][3], axis=0, dtype=object)
-        local_mask_fitted_planet = np.concatenate(cofiam_metadata[-1][4], axis=0, dtype=object)
-        cadence = cofiam_metadata[13]
-        t0s = cofiam_metadata[10]
-        period_processed = cofiam_metadata[11]
-        duration_processed = cofiam_metadata[12]
-
+        
         # remove outliers in unmasked poly detrended lc
         cofiam_x_no_outliers, cofiam_detrended_no_outliers = reject_outliers_everywhere(
             local_x, cofiam_detrended, local_yerr, 5 * cadence, 5, 10
@@ -500,9 +569,9 @@ def detrend_single_variable_methods(xs, ys, ys_err, t0, period, duration, save_t
             cofiam_x_no_outliers,
             cofiam_detrended_no_outliers,
             t0s, period,
-            float(6*duration / (24.0) / period),
+            float(6*duration / period),
             0.009,
-            save_to_directory + 'CoFiAM_outliers.pdf'
+            save_to_directory + '/' + str(flux_type) + '_' + 'CoFiAM_outliers.pdf'
         )
         
         end = time.time()
@@ -511,13 +580,6 @@ def detrend_single_variable_methods(xs, ys, ys_err, t0, period, duration, save_t
             + str(np.round(end - start, 2))
             + " seconds"
         )
-
-
-    local_x = np.concatenate(prepared_metadata[-1][0], axis=0, dtype=object)
-    local_yerr = np.concatenate(prepared_metadata[-1][2], axis=0, dtype=object)
-    local_y = np.concatenate(prepared_metadata[-1][1], axis=0, dtype=object)
-    local_mask = np.concatenate(prepared_metadata[-1][3], axis=0, dtype=object)
-    local_mask_fitted_planet = np.concatenate(prepared_metadata[-1][4], axis=0, dtype=object)
 
     output = [local_x, local_y, local_yerr, local_mask, local_mask_fitted_planet]
     nan_array = np.empty(np.shape(local_x))
@@ -580,10 +642,11 @@ def single_main():
     input_planet_number = args.planet_num
     input_transit_number = args.transit_num
     input_lightcurve_dir = args.path_to_lightcurve
+    input_flux_type = args.flux_type
     already_normalized = args.already_normalized
     input_save_to_dir = args.save_to_dir
     input_depth = float(args.depth)
-    input_period = float(args.period) if args.period else None
+    input_period = float(args.p) if args.p else None
     input_t0 = float(args.t0) if args.t0 else None
     input_duration = float(args.duration) if args.duration else None
     input_mask_width = float(args.mask_width)
@@ -593,11 +656,6 @@ def single_main():
     input_local = args.local
     input_GP = args.GP
 
-    if input_t0 is None:
-        print("Error: t0 (mid-transit time) is required")
-        sys.exit(1)
-        
-    
     # create list of detrend methods
     input_detrend_methods = []
     if input_GP == "True":
@@ -609,27 +667,42 @@ def single_main():
     if input_local == "True":
         input_detrend_methods.append("local")
 
-    # read in single light curve
-    time, flux, flux_err = get_single_user_lightcurve(
-        input_lightcurve_dir, input_save_to_dir, input_planet_number, input_transit_number, already_normalized, \
-            input_depth, input_period, input_t0, input_duration, input_mask_width, input_show_plots
-    )
-
-           
     if not input_save_to_dir:
         save_to_dir = os.path.dirname(input_lightcurve_dir) # save stuff in same directory as lightcurve file
     else:
         save_to_dir = input_save_to_dir
-    print(f'Will save detrended data to {save_to_dir}.')
 
     # create detrended data folders
     path = os.path.join(save_to_dir, f'detrended_transit_{input_transit_number}')
 
+    print(f'Will save detrended data to {path}.')
+
     os.makedirs(path, exist_ok=True)
+
+    # read in single light curve
+    [
+            x_epochs,
+            y_epochs,
+            yerr_epochs,
+            mask_epochs,
+            mask_fitted_planet_epochs,
+            problem_times,
+            t0s,
+            period,
+            duration,
+            cadence,
+        ] = process_single_user_lightcurve(
+        input_lightcurve_dir, save_to_dir, input_planet_number, input_transit_number, already_normalized, \
+            input_depth, input_period, input_t0, input_duration, input_mask_width, input_show_plots, path,
+            input_flux_type, input_id
+    )
+
 
     # now to detrend
 
-    detrend_methods, output = detrend_single_variable_methods(time, flux, flux_err, input_t0, input_period, input_duration, path+'/', input_show_plots, input_detrend_methods)
+    detrend_methods, output = detrend_single_variable_methods(x_epochs, y_epochs, yerr_epochs,
+                                                              mask_epochs, mask_fitted_planet_epochs, problem_times,
+                                                               t0s, period, duration, cadence, path+'/', input_show_plots, input_detrend_methods, path, input_id)
 
     # now let's plot and save data
 
@@ -659,7 +732,7 @@ def single_main():
 
     x_detrended = output[0]
     yerr_detrended = output[2] # local_yerr
-    mask_detrended = output[3]
+    mask_detrended = mask_epochs
 
     method_marg_detrended = np.nanmedian(y_detrended_transpose, axis=1)
     MAD = median_abs_deviation(
@@ -677,7 +750,6 @@ def single_main():
     detrend_dict["mask"] = mask_detrended
     detrend_dict["method marginalized"] = method_marg_detrended
 
-
     for ii in range(0, len(y_detrended)):
         detrend = y_detrended[ii]
         label = detrend_label[ii]
@@ -685,45 +757,35 @@ def single_main():
 
     detrend_df = pd.DataFrame(detrend_dict)
 
-    detrend_df.to_csv(path + "/" + "detrended.csv")
+    detrend_df.to_csv(path + "/" + str(input_flux_type) + '_' + "detrended.csv")
 
 
     # plot all detrended data
-    plot_detrended_lc(
+    plot_detrended_lc_single(
         x_detrended,
         y_detrended,
         detrend_label,
-        [input_t0],
-        float(6 * input_duration / (24.0)) / input_period,
-        input_period,
+        t0s,
+        float(6 * duration) / period,
+        period,
         colors,
-        input_duration,
+        duration,
         depth=input_depth,
-        figname=path + "/" + "individual_detrended.pdf",
+        figname=path + "/" + str(input_flux_type) + '_' + "individual_detrended.pdf",
     )
 
     # plot method marginalized detrended data
-    plot_detrended_lc(
+    plot_detrended_lc_single(
         x_detrended,
         [method_marg_detrended],
         ["method marg"],
-        [input_t0],
-        float(6 * input_duration / (24.0)) / input_period,
-        input_period,
+        t0s,
+        float(6 * duration) / period,
+        period,
         ["k"],
-        input_duration,
+        duration,
         depth=input_depth,
-        figname=path + "/" + "method_marg_detrended.pdf",
-    )
-
-    # plot binned phase folded lightcurve
-    plot_phase_fold_lc(
-        x_detrended,
-        method_marg_detrended,
-        input_period,
-        input_t0,
-        20,
-        figname=path + "/" + "phase_folded.pdf",
+        figname=path + "/" + str(input_flux_type) + '_' + "method_marg_detrended.pdf",
     )
 
 if __name__ == "__main__":

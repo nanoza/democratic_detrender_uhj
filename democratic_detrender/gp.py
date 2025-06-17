@@ -154,3 +154,70 @@ def gp_method(x, y, yerr, mask, mask_fitted_planet, t0s, duration, period):
     detrended_lc = np.concatenate(y_out_detrended, axis=0)
 
     return detrended_lc
+
+
+def gp_method_single(x, y, yerr, mask, mask_fitted_planet, t0s, duration, period):
+
+    theano.config.compute_test_value = "warn"
+
+    x = x[0]
+    y = y[0]
+    yerr = yerr[0]
+    mask = mask[0]
+    mask_fitted_planet = mask_fitted_planet[0]
+
+    try:
+        gp_model = gp_new(x[~mask], y[~mask], yerr[~mask], x)
+        gp_mod = gp_model['pred']
+    
+        # follow original structure for local window detrending
+        # since we have single transit, local window is the whole data
+        x_out = [x]
+        y_out = [y]
+        yerr_out = [yerr]
+        mask_out = [mask]
+        model_out = [gp_mod]
+
+        # now try adding a linear detrend
+        y_out_detrended = []
+        try:
+            y_detrended = get_detrended_lc(y, gp_mod)
+
+            # apply linear fit
+            linear_model = polyAM_function(x[~mask], y_detrended[~mask], 1)
+            poly_interp = interp1d(
+                x[~mask], linear_model, bounds_error=False, fill_value='extrapolate'
+            )
+            model_linear = poly_interp(x)
+
+            # final detrending
+            y_linear_detrended = get_detrended_lc(y_detrended, model_linear)
+            y_out_detrended.append(y_linear_detrended)
+
+        except:
+            print("GP linear detrending failed for this epoch")
+            # Just use the basic detrended version
+            nan_array = np.empty(np.shape(y))
+            nan_array[:] = np.nan
+            y_out_detrended.append(nan_array)
+
+        # concatenate to match original return format
+        detrended_lc = np.concatenate(y_out_detrended, axis=0)
+
+        return detrended_lc
+    
+    except:
+        print('GP failed for this epoch')
+        # Return NaN arrays
+        nan_array = np.empty(np.shape(y))
+        nan_array[:] = np.nan
+        
+        return nan_array, [np.nan]
+
+
+
+
+
+
+
+

@@ -5,7 +5,6 @@ import pandas as pd
 
 from scipy.interpolate import interp1d
 from matplotlib.widgets import Slider, Button
-# from democratic_detrender.helper_functions import bin_data
 from helper_functions import bin_data
 
 
@@ -195,7 +194,6 @@ def plot_transits(
     problem_times_flat = [item for sublist in problem_times for item in sublist]
 
     return sliders, buttons, problem_times_flat
-
 
 def plot_detrended_lc(
     xs,
@@ -417,9 +415,236 @@ def plot_detrended_lc(
     return None
 
 
+
+
+def plot_detrended_lc_single(
+    xs,
+    ys,
+    detrend_labels,
+    t0s_in_data,
+    window,
+    period,
+    colors,
+    duration,
+    mask_width=1.3,
+    depth=None,
+    figname=None,
+    title=None,
+):
+    """
+    inputs:
+    x = times
+    ys = [detrended light curves] of length N number of detrendings
+    detrend_labels = [detrending type] of length N number of detrendings
+    t0s_in_data = midtransits in data
+    window = what fraction of the period to plot on either side of transit (ie. window=1/2 means 1/2 period on either side)
+    period = planet period to define plotting limit
+    colors = [colors] of length N number of detrendings
+    figname = Name of file if you want to save figure
+    
+    return:
+    None
+    
+    
+    
+    
+    
+    """
+    import math
+
+    transit_windows = []
+    for t0 in t0s_in_data:
+        transit_windows.append(
+            [
+                t0 - mask_width * duration / (2),
+                t0 + mask_width * duration / (2),
+            ]
+        )
+
+    n_transit = np.arange(0, len(t0s_in_data), 1)
+
+    if len(t0s_in_data) > 1:
+
+        if len(ys) == 1:
+            fig, ax = plt.subplots(
+                ncols=3,
+                nrows=math.ceil(len(t0s_in_data) / 3),
+                figsize=[27, len(t0s_in_data) * len(ys)],
+                sharey=True,
+            )
+        else:
+            fig, ax = plt.subplots(
+                ncols=3,
+                nrows=math.ceil(len(t0s_in_data) / 3),
+                figsize=[27, len(t0s_in_data) * len(ys) / 4],
+                sharey=True,
+            )
+
+    else:
+        fig, ax = plt.subplots(ncols=1, nrows=1, figsize=[18, 13], sharey=True)
+
+    y_detrend = []
+
+    if not depth:
+        depth = 0.01
+
+    if len(t0s_in_data) == 1:
+        t0 = t0s_in_data[0]
+        detrend_offset = 0
+        for detrend_index in range(0, len(ys)):
+
+            y_detrend = ys[detrend_index]
+            x = xs
+
+            ax.plot(
+                x,
+                y_detrend + detrend_offset,
+                "o",
+                color=colors[detrend_index],
+                alpha=0.63,
+                markersize=9,
+            )
+
+            ax.text(
+                t0 - (period * window) + 0.01,
+                detrend_offset + 0.013,
+                detrend_labels[detrend_index],
+                color=colors[detrend_index],
+                fontsize=13,
+            )
+
+            detrend_offset += depth
+
+        [
+            ax.axvline(transit[0], linewidth=1.8, color="k", alpha=0.79, ls="--")
+            for transit in transit_windows
+        ]
+        [
+            ax.axvline(transit[1], linewidth=1.8, color="k", alpha=0.79, ls="--")
+            for transit in transit_windows
+        ]
+        ax.set_xlabel("time [KBJD]", fontsize=27)
+        ax.set_ylabel("intensity", fontsize=27)
+        ax.set_xlim(t0 - (period * window), t0 + (period * window))
+
+        ax.set_ylim(-1.2 * depth, depth * len(ys))
+        ax.tick_params(axis="x", rotation=45)
+        ax.ticklabel_format(useOffset=False)
+
+    elif len(t0s_in_data) < 6:
+        for ii in range(0, len(t0s_in_data)):
+            ax_ii = ax[ii]
+            t0 = t0s_in_data[ii]
+
+            detrend_offset = 0
+            for detrend_index in range(0, len(ys)):
+
+                y_detrend = ys[detrend_index]
+                x = xs
+
+                ax_ii.plot(
+                    x,
+                    y_detrend + detrend_offset,
+                    "o",
+                    color=colors[detrend_index],
+                    alpha=0.63,
+                )
+
+                ax_ii.text(
+                    t0 - (period * window) + 0.18,
+                    detrend_offset + 0.0018,
+                    detrend_labels[detrend_index],
+                    color=colors[detrend_index],
+                    fontsize=18,
+                )
+
+                detrend_offset += depth
+
+            ax_ii.axvline(
+                transit_windows[ii][0], linewidth=1.8, color="k", alpha=0.79, ls="--"
+            )
+            ax_ii.axvline(
+                transit_windows[ii][1], linewidth=1.8, color="k", alpha=0.79, ls="--"
+            )
+
+            ax_ii.set_xlabel("time [KBJD]", fontsize=18)
+            ax_ii.set_ylabel("intensity", fontsize=18)
+            ax_ii.set_xlim(t0 - (period * window), t0 + (period * window))
+            ax_ii.set_ylim(-1.2 * depth, depth * len(ys))
+            ax_ii.tick_params(axis="x", rotation=45)
+
+    else:
+        column = 0
+        row = 0
+
+        for ii in range(0, len(t0s_in_data)):
+            ax_ii = ax[row][column]
+
+            t0 = t0s_in_data[ii]
+
+            detrend_offset = 0
+            for detrend_index in range(0, len(ys)):
+
+                y_detrend = ys[detrend_index]
+                x = xs
+
+                ax_ii.plot(
+                    x,
+                    y_detrend + detrend_offset,
+                    "o",
+                    color=colors[detrend_index],
+                    alpha=0.63,
+                )
+
+                ax_ii.text(
+                    t0 - (period * window) + 0.18,
+                    detrend_offset + 0.0018,
+                    detrend_labels[detrend_index],
+                    color=colors[detrend_index],
+                    fontsize=18,
+                )
+
+                detrend_offset += depth
+
+            ax_ii.axvline(
+                transit_windows[ii][0], linewidth=1.8, color="k", alpha=0.79, ls="--"
+            )
+            ax_ii.axvline(
+                transit_windows[ii][1], linewidth=1.8, color="k", alpha=0.79, ls="--"
+            )
+
+            ax_ii.set_xlabel("time [KBJD]", fontsize=18)
+            ax_ii.set_ylabel("intensity", fontsize=18)
+            ax_ii.set_xlim(t0 - (period * window), t0 + (period * window))
+            ax_ii.set_ylim(-1.2 * depth, depth * len(ys))
+            ax_ii.tick_params(axis="x", rotation=45)
+
+            if column == 2:
+                column = 0
+                row += 1
+            else:
+                column += 1
+
+    if title:
+        fig.suptitle(title, fontsize=36, y=1.01)
+
+    # fig.delaxes(ax[1][4])
+    fig.tight_layout()
+
+    if figname:
+        fig.savefig(figname, bbox_inches="tight")
+
+    return None
+
+
 def plot_phase_fold_lc(time, lc, period, t0s, xlim, figname):
 
     plt.close("all")
+
+    print(time)
+    print(time.shape)
+    print(t0s)
+    print(t0s.shape)
 
     fig = plt.figure(figsize=[18, 6])
     x_fold = (time - t0s[0] + 0.5 * period) % period - 0.5 * period
@@ -550,6 +775,7 @@ def plot_individual_outliers(
     outlier_times = []
     outlier_fluxes = []
     n_outliers = len(flux) - len(flux_out)
+    print(f'{n_outliers} found')
 
     outliers_count = 0
     for ii in range(0, len(time)):

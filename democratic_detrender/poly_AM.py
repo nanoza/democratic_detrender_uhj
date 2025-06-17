@@ -266,3 +266,84 @@ def polynomial_method(
     detrended_lc = np.concatenate(y_out_detrended, axis=0)
 
     return detrended_lc, DWs
+
+
+def polynomial_method_single(x, y, yerr, mask, mask_fitted_planet, t0s, duration, period, local_x):
+
+    x = x[0]
+    y = y[0]
+    yerr = yerr[0]
+    mask = mask[0]
+    mask_fitted_planet = mask_fitted_planet[0]
+
+
+    # then convert to proper np arrays 
+    x = np.array(x, dtype=float)
+    y = np.array(y, dtype=float)
+    yerr = np.array(yerr, dtype=float)
+    mask = np.array(mask, dtype=bool)
+    mask_fitted_planet = np.array(mask_fitted_planet, dtype=bool)
+
+
+    t0 = t0s[0]
+
+    local_start_x = local_x[0][0]
+    local_end_x = local_x[0][-1]
+
+    try:
+        poly = polyAM_iterative(x, y, mask, mask_fitted_planet, local_start_x, local_end_x)
+
+        poly_interp = interp1d(x[~mask], poly[0], bounds_error=False, fill_value="extrapolate")
+        best_model = poly_interp(x)
+        DW = poly[2]
+
+
+        poly_mod = [best_model]
+        poly_mod_all = list(best_model)
+        DWs = [DW]
+
+
+        # Following original structure for local window detrending
+        # Since we have single transit, local window is the whole data
+        x_out = [x]
+        y_out = [y]
+        yerr_out = [yerr]
+        mask_out = [mask]
+        model_out = [best_model]
+
+        # now let's try adding a linear detrend
+        y_out_detrended = []
+        try:
+            # detrend
+            y_detrended = get_detrended_lc(y, best_model)
+
+            # apply linear fit
+            linear_model = polyAM_function(x[~mask], y_detrended[~mask], 1)
+            poly_interp = interp1d(
+                x[~mask], linear_model, bounds_error=False, fill_value="extrapolate"
+            )
+            model_linear = poly_interp(x)
+            
+            # Final detrending
+            y_linear_detrended = get_detrended_lc(y_detrended, model_linear)
+            y_out_detrended.append(y_linear_detrended)
+            
+        except:
+            print("polyAM linear detrending failed for this epoch")
+            # Just use the basic detrended version
+            nan_array = np.empty(np.shape(y))
+            nan_array[:] = np.nan
+            y_out_detrended.append(nan_array)
+            
+        # Concatenate to match original return format
+        detrended_lc = np.concatenate(y_out_detrended, axis=0)
+        
+        return detrended_lc, DWs
+    
+    except:
+        print("polyAM failed for this transit")
+        # Return NaN arrays
+        nan_array = np.empty(np.shape(y))
+        nan_array[:] = np.nan
+        
+        return nan_array, [np.nan]
