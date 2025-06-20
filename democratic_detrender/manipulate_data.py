@@ -193,6 +193,77 @@ def add_nans_for_missing_data(
         mask_fitted_planet_detrended,
     )
 
+def add_nans_for_detrended_removed_outlier_data(x_local, detrended_x_out, detrended_y_out):
+    """
+    Add NaN values at timepoints that were removed during outlier rejection
+    to maintain consistent time grids across all detrending methods.
+    
+    Parameters:
+    -----------
+    x_local : array
+        Full time array (reference grid)
+    detrended_x_out : array
+        Time array with outliers removed (shorter than x_local)
+    detrended_y_out : array
+        Detrended flux with outliers removed (same length as detrended_x_out)
+        
+    Returns:
+    --------
+    fixed_y_out : array
+        Error array restored to full length
+    """
+    
+    # # Convert to numpy arrays for safety
+    # x_local = np.array(x_local)
+    # detrended_x_out = np.array(detrended_x_out) 
+    # detrended_y_out = np.array(detrended_y_out)
+    
+    # # Initialize restored arrays with full length
+    # restored_x = x_local.copy()
+    # restored_y = np.full(len(x_local), np.nan)
+    # restored_yerr = np.array(yerr_local)
+    # restored_mask = np.array(mask_local)
+    # restored_mask_fitted_planet = np.array(mask_fitted_planet_local)
+
+    # let's create a grid of y values, initalized as all nans for now
+    # fixed_y_out = np.full_like(x_local, np.nan)
+    
+    # # create a mapping from the outlier-free data back to the full timegrid
+    # outlier_free_index = 0
+    
+    # for i, timepoint in enumerate(x_local):
+    #     # check if this time point exists in the outlier-free array
+    #     if (outlier_free_index < len(detrended_x_out) and 
+    #         np.isclose(timepoint, detrended_x_out[outlier_free_index], rtol=1e-10)):
+            
+    #         # if the time point exists in the outlier-free data, use the detrended value
+    #         fixed_y_out[i] = detrended_y_out[outlier_free_index]
+    #         outlier_free_index += 1
+            
+    #     else:
+    #         # Time point was removed for being an outlier, save as NaN
+    #         fixed_y_out[i] = np.nan
+
+    # assumes x_local is longer or same length array as detrended_x_out
+    for i, timepoint in enumerate(x_local):
+        # check if this timepoint at x_local[i] is in detrended_x_out
+        if timepoint in detrended_x_out:
+            # it's in there already, don't do anything
+            continue
+        elif timepoint not in detrended_x_out: # otherwise
+            # otherwise, find the nearest x numbers to the left and right of the missing x
+            # get the index of where to pop in this timepoint in detrended_x_out
+            insert_at_index = np.searchsorted(detrended_x_out, timepoint)
+
+            # then insert into detrended_x_out
+            detrended_x_out = np.insert(detrended_x_out, insert_at_index, timepoint)
+            # then insert a value of np.nan at the same index in detrended y out
+            detrended_y_out = np.insert(detrended_y_out, insert_at_index, np.nan)
+
+            
+    return detrended_y_out
+
+
 
 def split_around_transits(
     x, y, yerr, mask, mask_fitted_planet, t0s, window, period, model="None"

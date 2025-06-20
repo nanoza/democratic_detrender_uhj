@@ -641,11 +641,6 @@ def plot_phase_fold_lc(time, lc, period, t0s, xlim, figname):
 
     plt.close("all")
 
-    print(time)
-    print(time.shape)
-    print(t0s)
-    print(t0s.shape)
-
     fig = plt.figure(figsize=[18, 6])
     x_fold = (time - t0s[0] + 0.5 * period) % period - 0.5 * period
     plt.scatter(x_fold, lc, c=time, s=10)
@@ -775,7 +770,7 @@ def plot_individual_outliers(
     outlier_times = []
     outlier_fluxes = []
     n_outliers = len(flux) - len(flux_out)
-    print(f'{n_outliers} found')
+    print(f'{n_outliers} outliers found')
 
     outliers_count = 0
     for ii in range(0, len(time)):

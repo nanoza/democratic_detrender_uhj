@@ -197,12 +197,9 @@ def local_method_single(
     # define local window
     # duration_days = duration / 24.0
     window_half_width = 3 * duration  # 3 durations on each side = 6 total, assuming given duration is in days
-    print('local')
-
     
     # Extract local window around transit
     local_mask = np.abs(x - t0) <= window_half_width
-    print(len(local_mask))
     x_local = x[local_mask]
     y_local = y[local_mask]
     yerr_local = yerr[local_mask]

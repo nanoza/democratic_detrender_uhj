@@ -198,7 +198,7 @@ def process_single_user_lightcurve(lightcurve_path, save_to_directory, planet_nu
     quarters_end = [el[-1] for el in quarters]
 
     if not already_normalized:
-        # normalize
+        # normalize around 0
         mu = np.median(ys)
         ys = ys / mu - 1
         ys_err = ys_err / mu
@@ -212,7 +212,7 @@ def process_single_user_lightcurve(lightcurve_path, save_to_directory, planet_nu
         mask_fitted_planet_out,
         moving_median,
     ) = reject_outliers_out_of_transit(
-        xs_array, ys_array, ys_err_array, np.asarray(mask,dtype=bool), np.asarray(mask_fitted_planet,dtype=bool), 30 * cadence, 4
+        xs_array, ys_array, ys_err_array, np.asarray(mask,dtype=bool), np.asarray(mask_fitted_planet,dtype=bool), 30 * cadence, 3
     )
 
     plot_outliers(
@@ -262,7 +262,6 @@ def process_single_user_lightcurve(lightcurve_path, save_to_directory, planet_nu
         mask_fitted_planet_quarters,
         t0s,
     )
-
     x_quarters_w_transits = np.concatenate(x_quarters_w_transits, axis=0, dtype=object)
     y_quarters_w_transits = np.concatenate(y_quarters_w_transits, axis=0, dtype=object)
     yerr_quarters_w_transits = np.concatenate(
@@ -331,10 +330,6 @@ def process_single_user_lightcurve(lightcurve_path, save_to_directory, planet_nu
 def detrend_single_variable_methods(x_epochs, y_epochs, yerr_epochs, mask_epochs, mask_fitted_planet_epochs, problem_times, t0s, period, duration, cadence, save_to_directory, show_plots, detrend_methods, path,
                                     flux_type, objectname):
 
-
-    all_detrended = []
-    all_results = []
-    detrend_methods_success = []
 
     # insert thing that handles clipping around problem times here, testing with pre-clipped data for now
     # adaptation of trim_jump_times
@@ -435,7 +430,8 @@ def detrend_single_variable_methods(x_epochs, y_epochs, yerr_epochs, mask_epochs
         )
         
         local_x_no_outliers, local_detrended_no_outliers = reject_outliers_everywhere(
-            local_x, local_detrended, local_yerr, 5 * cadence, 5, 10
+            local_x, local_detrended, local_yerr, 5 * cadence, 5, 3 # increasing number times cadence tends to increase number of outliers
+                                                                      # increasing sigma tends to decrease number of outliers
         )
 
 
@@ -458,7 +454,6 @@ def detrend_single_variable_methods(x_epochs, y_epochs, yerr_epochs, mask_epochs
             + " seconds"
         )
         
-
     # polyAM detrending
     if 'polyAM' in detrend_methods:
         start = time.time()
@@ -480,7 +475,7 @@ def detrend_single_variable_methods(x_epochs, y_epochs, yerr_epochs, mask_epochs
 
         # remove outliers in unmasked poly detrended lc
         poly_x_no_outliers, poly_detrended_no_outliers = reject_outliers_everywhere(
-            local_x, poly_detrended, local_yerr, 5 * cadence, 5, 10
+            local_x, poly_detrended, local_yerr, 5 * cadence, 5, 3
         )
 
         plot_individual_outliers(
@@ -520,7 +515,7 @@ def detrend_single_variable_methods(x_epochs, y_epochs, yerr_epochs, mask_epochs
 
         # remove outliers in unmasked poly detrended lc
         gp_x_no_outliers, gp_detrended_no_outliers = reject_outliers_everywhere(
-            local_x, gp_detrended, local_yerr, 5 * cadence, 5, 10
+            local_x, gp_detrended, local_yerr, 5 * cadence, 5, 3
         )
 
         plot_individual_outliers(
@@ -560,7 +555,7 @@ def detrend_single_variable_methods(x_epochs, y_epochs, yerr_epochs, mask_epochs
         
         # remove outliers in unmasked poly detrended lc
         cofiam_x_no_outliers, cofiam_detrended_no_outliers = reject_outliers_everywhere(
-            local_x, cofiam_detrended, local_yerr, 5 * cadence, 5, 10
+            local_x, cofiam_detrended, local_yerr, 5 * cadence, 5, 3
         )
 
         plot_individual_outliers(
@@ -638,7 +633,7 @@ def single_main():
     args = single_parse_arguments() # grab arguments
     
     # Extract arguments
-    input_id = args.object
+    input_id = args.object_name
     input_planet_number = args.planet_num
     input_transit_number = args.transit_num
     input_lightcurve_dir = args.path_to_lightcurve
@@ -696,13 +691,11 @@ def single_main():
             input_depth, input_period, input_t0, input_duration, input_mask_width, input_show_plots, path,
             input_flux_type, input_id
     )
-
-
     # now to detrend
 
     detrend_methods, output = detrend_single_variable_methods(x_epochs, y_epochs, yerr_epochs,
                                                               mask_epochs, mask_fitted_planet_epochs, problem_times,
-                                                               t0s, period, duration, cadence, path+'/', input_show_plots, input_detrend_methods, path, input_id)
+                                                               t0s, period, duration, cadence, path+'/', input_show_plots, input_detrend_methods, path, input_flux_type, input_id)
 
     # now let's plot and save data
 
@@ -744,7 +737,6 @@ def single_main():
 
     detrend_dict = {}
 
-
     detrend_dict["time"] = x_detrended
     detrend_dict["yerr"] = yerr_detrended
     detrend_dict["mask"] = mask_detrended
@@ -758,7 +750,6 @@ def single_main():
     detrend_df = pd.DataFrame(detrend_dict)
 
     detrend_df.to_csv(path + "/" + str(input_flux_type) + '_' + "detrended.csv")
-
 
     # plot all detrended data
     plot_detrended_lc_single(
@@ -787,6 +778,109 @@ def single_main():
         depth=input_depth,
         figname=path + "/" + str(input_flux_type) + '_' + "method_marg_detrended.pdf",
     )
+
+    # now let's handle detrended data that has had outliers removed
+
+    y_out_detrended = [
+        output[7], # local
+        output[10], # polyam
+        output[13], # gp
+        output[16]  # cofiam
+    ]
+
+    y_out_detrended = np.array(y_out_detrended)
+    
+    x_out_detrended = [
+        output[6], # local
+        output[9], # polyam
+        output[12], # gp
+        output[15]  # cofiam
+    ]
+
+    x_out_detrended = np.array(x_out_detrended)
+
+    y_out_full_timegrid_detrended = []
+
+    # for each detrended method
+    for i in range(len(y_out_detrended)):
+
+        y_out_detrended_i = y_out_detrended[i]
+        x_out_detrended_i = x_out_detrended[i]
+        yerr_detrended = output[2] # local_yerr
+        mask_detrended = mask_epochs
+
+
+        # add any missing y at x values back in as nans if theyve been removed as outliers
+        y_out_detrended_i = add_nans_for_detrended_removed_outlier_data(x_detrended, x_out_detrended_i, y_out_detrended_i)
+        y_out_full_timegrid_detrended.append(y_out_detrended_i)
+
+
+
+    # then take the method marginalization
+    y_out_full_timegrid_detrended_transpose = np.array(y_out_full_timegrid_detrended).T
+    method_marg_out_detrended = np.nanmedian(y_out_full_timegrid_detrended_transpose, axis=1)
+    MAD_out = median_abs_deviation(
+        y_out_full_timegrid_detrended_transpose, axis =1, scale = 1/1.486, nan_policy='omit'
+    )
+    yerr_out_detrended = np.sqrt(yerr_detrended.astype(float)**2 + MAD_out**2)
+
+    # save detrended no outlier data as txt file, comma-separated
+
+    detrend_out_dict = {}
+
+    detrend_out_dict["time"] = x_detrended
+    # detrend_out_dict["mask"] = mask_detrended
+    detrend_out_dict["method marginalized out"] = method_marg_out_detrended
+    detrend_out_dict["yerr"] = yerr_out_detrended
+
+
+    # for ii in range(0, len(y_out_full_timegrid_detrended)):
+    #     detrend = y_out_full_timegrid_detrended[ii]
+    #     label = detrend_label[ii]
+    #     detrend_out_dict[label] = detrend
+
+    detrend_out_df = pd.DataFrame(detrend_out_dict)
+    detrend_out_df.to_csv(path + "/" + str(input_flux_type) + '_' + "detrended_no_outliers.txt", index=False)
+
+    # plot all detrended without outliers data
+    plot_detrended_lc_single(
+        x_detrended, # use original x detrended as it contains all x values
+        y_out_full_timegrid_detrended,
+        detrend_label,
+        t0s,
+        float(6 * duration) / period,
+        period,
+        colors,
+        duration,
+        depth=input_depth,
+        figname=path + "/" + str(input_flux_type) + '_' + "individual_detrended_no_outliers.pdf",
+    )
+
+    # plot method marginalized detrended data
+    plot_detrended_lc_single(
+        x_detrended, # use original x detrended as it contains all x values
+        [method_marg_out_detrended],
+        ["method marg"],
+        t0s,
+        float(6 * duration) / period,
+        period,
+        ["k"],
+        duration,
+        depth=input_depth,
+        figname=path + "/" + str(input_flux_type) + '_' + "method_marg_detrended_no_outliers.pdf",
+    )
+
+
+
+
+
+
+
+
+
+
+
+
 
 if __name__ == "__main__":
     single_main()
