@@ -50,6 +50,8 @@ def single_parse_arguments():
 
     parser.add_argument('planet_num', type=int, help='Number of planet. In this case, serves purely to label plots and subdirectories.')
 
+    parser.add_argument('sector_num', type=int, help='Sector number transit is in.')
+
     parser.add_argument("transit_num", type=int, help='Number of inputted transit, assuming each input lightcurve is of one transit. In this, serves purely to label plots.')
 
     parser.add_argument('path_to_lightcurve', help='Path that points to lightcurve of transit, including file name.')
@@ -154,7 +156,7 @@ def prepare_ephemeris(user_period, user_t0, user_duration, xs, mask_width=1.3):
     return period, t0, duration
 
 
-def process_single_user_lightcurve(lightcurve_path, save_to_directory, planet_num, transit_num, already_normalized, depth, period,
+def process_single_user_lightcurve(lightcurve_path, save_to_directory, planet_num, sector_num, transit_num, already_normalized, depth, period,
                            t0, duration, mask_width, show_plots, path, flux_type, objectname):
        
     # read in light curve as pandas dataframe
@@ -635,6 +637,7 @@ def single_main():
     # Extract arguments
     input_id = args.object_name
     input_planet_number = args.planet_num
+    input_sector_number = args.sector_num
     input_transit_number = args.transit_num
     input_lightcurve_dir = args.path_to_lightcurve
     input_flux_type = args.flux_type
@@ -668,7 +671,7 @@ def single_main():
         save_to_dir = input_save_to_dir
 
     # create detrended data folders
-    path = os.path.join(save_to_dir, f'detrended_transit_{input_transit_number}')
+    path = os.path.join(save_to_dir, 'detrending', f'sector_{input_sector_number}', f'detrended_transit_{input_transit_number}')
 
     print(f'Will save detrended data to {path}.')
 
@@ -687,7 +690,7 @@ def single_main():
             duration,
             cadence,
         ] = process_single_user_lightcurve(
-        input_lightcurve_dir, save_to_dir, input_planet_number, input_transit_number, already_normalized, \
+        input_lightcurve_dir, save_to_dir, input_planet_number, input_sector_number, input_transit_number, already_normalized, \
             input_depth, input_period, input_t0, input_duration, input_mask_width, input_show_plots, path,
             input_flux_type, input_id
     )
@@ -750,6 +753,8 @@ def single_main():
     detrend_df = pd.DataFrame(detrend_dict)
 
     detrend_df.to_csv(path + "/" + str(input_flux_type) + '_' + "detrended.csv")
+
+    print('method marginalized data with outliers saved to '+path + "/" + str(input_flux_type) + '_' + "detrended.csv")
 
     # plot all detrended data
     plot_detrended_lc_single(
@@ -841,6 +846,8 @@ def single_main():
 
     detrend_out_df = pd.DataFrame(detrend_out_dict)
     detrend_out_df.to_csv(path + "/" + str(input_flux_type) + '_' + "detrended_no_outliers.txt", index=False)
+
+    print('method marginalized data without outliers saved to ' + path + "/" + str(input_flux_type) + '_' + "detrended_no_outliers.txt")
 
     # plot all detrended without outliers data
     plot_detrended_lc_single(
